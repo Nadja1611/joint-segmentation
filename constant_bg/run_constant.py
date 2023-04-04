@@ -1,16 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Apr  4 11:19:50 2023
-
-@author: johan
-"""
-
-# -*- coding: utf-8 -*-
-"""
-Created on Sun Apr  2 18:58:01 2023
-
-@author: johan
-"""
 
 
 
@@ -81,7 +68,6 @@ def create_dir(dir):
     print("Directory already existed : ", dir)
   return dir
 args.patient= 12
-args.patient = 14
 create_dir(path)
 #data = np.load(
  #   'D:/DenoiSeg/DSB2018_n20.npz', allow_pickle=True)
