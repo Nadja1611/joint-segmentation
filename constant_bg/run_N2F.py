@@ -62,7 +62,7 @@ args.output_directory = args.output_directory+"/" + args.dataset + "/patient_"+ 
 #define directory where you want to have your outputs saved
 name = "/S2S_Method_"+ args.method + "_Lambda_" + str(args.lam) + "_ratio_"+ str(args.ratio) +'_lr_'+str(args.learning_rate)
 path = args.output_directory+  name
-args.lam=0.1
+args.lam=0.0#75
 
 print(path)
 
@@ -104,7 +104,7 @@ if args.method == "joint" or args.method == "cv":
            for k in range(0):
                mynet.segmentation_step(mynet.f)
         else:       
-            for k in range(3000):
+            for k in range(5000):
                 mynet.segmentation_step2denoisers_acc_bg_constant(mynet.f)
             #plt.plot(mynet.en)
             #plt.plot(mynet.fid)
@@ -146,6 +146,11 @@ if args.method == "joint" or args.method == "cv":
             plt.show()
         ratio = 128**2/torch.sum(mynet.x)
         print(ratio)
+        plt.subplot(2,1,1)#
+        plt.plot(mynet.val_loss_list_N2F[-1000:])
+        plt.subplot(2,1,2)
+        plt.plot(mynet.energy_denoising[-1000:])
+        plt.show()
         #mynet.denoising_step_r1()
        # mynet.reinitialize_network()
         mynet.N2Fstep()
