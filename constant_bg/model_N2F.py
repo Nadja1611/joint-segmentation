@@ -499,7 +499,8 @@ class Denseg_S2S:
                      lr=self.learning_rate, betas=(0.5, 0.999))
         self.sigma_fid = 1.0/5
         self.sigma_tv = 1/2
-        self.tau =  0.95/(4 + 2*5)
+        #self.tau =  0.95/(4 + 2*5)
+        self.tau = 1/np.sqrt(100)
         self.tau_fid1 = self.tau/3
         self.theta = 1.0
         self.p = []
@@ -526,6 +527,8 @@ class Denseg_S2S:
         self.net.to(self.device)
         self.optimizer = optim.Adam(self.net.parameters(), lr=self.learning_rate)
         self.energy_denoising = []
+        self.val_loss_list_N2F = []
+        self.bg_loss_list = []
         
     def normalize(self,f):
         f = torch.tensor(f).float()
@@ -576,7 +579,7 @@ class Denseg_S2S:
         self.r = r1.clone()
         # Update primal variables
         x_old = torch.clone(self.x)  
-        self.x = proj_unitintervall(x_old + self.tau*div(p1) - self.tau*adjoint_der_Fid1(x_old, f, self.q) - self.tau *
+        self.x = proj_unitintervall(x_old + self.tau*0*div(p1) - self.tau*adjoint_der_Fid1(x_old, f, self.q) - self.tau *
                                adjoint_der_Fid2(x_old, f, self.r))  # proximity operator of indicator function on [0,1]
         self.x_tilde = self.x + self.theta*(self.x-x_old)
         if self.verbose == True:
@@ -585,7 +588,7 @@ class Denseg_S2S:
             self.fid.append(fidelity.cpu())
             tv_p = norm1(gradient(self.x))
             self.tv.append(total.cpu())
-            energy = fidelity +self.lam* total
+            energy = fidelity +self.lam*0* total
             self.en.append(energy.cpu())
           #  plt.plot(np.array(self.tv), label = "TV")
             if self.iteration %2999 == 0:  
@@ -627,16 +630,16 @@ class Denseg_S2S:
 
         # constant difference term
         #filteing for smoother differences between denoised images and noisy input images
-        self.x = proj_unitintervall(((x_old + self.tau/4*div(p1) - self.tau/4*(diff1)**2 + self.tau/4*diff2**2))) # proximity operator of indicator function on [0,1]
+        self.x = proj_unitintervall(((x_old + self.tau*div(p1) - self.tau*(diff1)**2 + self.tau*diff2**2))) # proximity operator of indicator function on [0,1]
         ######acceleration variables
         self.theta=1
         ###### 
         self.x_tilde = self.x + self.theta*(self.x-x_old)
         if self.verbose == True:
-            fidelity = torch.sum((diff1)**2*self.x)/torch.sum(self.x) + torch.sum((diff2)**2*(1-self.x))/torch.sum(1-self.x)
-            fid_den = (torch.sum((diff1)**2*self.x)/torch.sum(self.x)).cpu()
+            fidelity = torch.sum((diff1)**2*self.x)+ torch.sum((diff2)**2*(1-self.x))
+            fid_den = (torch.sum((diff1)**2*self.x)).cpu()
             self.fidelity_fg.append(fid_den)
-            fid_const =( torch.sum((diff2**2*(1-self.x)))/torch.sum(1-self.x)).cpu()
+            fid_const =( torch.sum((diff2**2*(1-self.x)))).cpu()
             self.fidelity_bg.append(fid_const)
             total = norm1(gradient(self.x))
             self.fid.append(fidelity.cpu())
@@ -656,83 +659,16 @@ class Denseg_S2S:
 
 
 
-    def denoising_step_r1(self):
-        f = torch.clone(self.f_std[:,:,:,0])
-        loss_mask = torch.clone(self.x>=0.5).detach()
-       # loss_mask = self.x
-        mu_r1 = torch.mean(f[loss_mask])
-        print('mu_1 is', mu_r1)
-        ratio = (f.shape[-1]*f.shape[-2]/2)/torch.sum(loss_mask)
-        img_input = torch.clone(f)
-        w,h,c = f.shape
-        p=self.ratio
-
-        #number_of_its=round(ratio.cpu().numpy()*self.denois_its)
-        #slice_avg = torch.tensor([1,1,128,128]).to(device)
-        for itr in range(self.denois_its):
-            self.optimizer_r1.zero_grad()
-            p_mtx = np.random.uniform(size=[img_input.shape[0],img_input.shape[1],img_input.shape[2]])
-            mask = (p_mtx>p).astype(np.double)*0.7
-            y = torch.clone(img_input)
-            p1 = np.random.uniform(size=1)
-            p2 = np.random.uniform(size=1)
-            img_input_tensor = image_loader(img_input, self.device, p1, p2)
-            y = image_loader(y, self.device, p1, p2)
-            mask = np.expand_dims(mask,0)            
-            mask = torch.tensor(mask).to(self.device, dtype=torch.float32)
-
-            self.DenoisNet_r1.train()
-            img_input_tensor = img_input_tensor*mask*loss_mask
-            output = self.DenoisNet_r1(img_input_tensor, mask*loss_mask)	    
-            #loader = T.Compose([T.RandomHorizontalFlip(torch.round(torch.tensor(p1))),T.RandomVerticalFlip(torch.round(torch.tensor(p2)))])
-
-            loss_denoising = torch.sum((output-y)**2*(1-mask)*loss_mask)/torch.sum((1-mask)*loss_mask)
-            loss = loss_denoising#+0.1*loss_reg
-         #   loss = torch.mean(((output-mu_r2)**2)*loss_mask)
-            print(itr)
-            if itr % 100 ==0:
-                print("loss_fg:"+str(loss_denoising))
-                loss.backward()
-                self.loss_s2s.append(loss_denoising.detach().cpu())
-
-            self.optimizer_r1.step()
-
-            if (itr+1) == self.denois_its:
-                self.DenoisNet_r1.eval()
-                sum_preds = np.zeros((img_input.shape[0],img_input.shape[1],img_input.shape[2]))
-                for j in range(self.Npred):
-                #generate bernoulli sampled instances
-                    p_mtx_vl = np.random.uniform(size=img_input.shape)
-                    mask_val = (p_mtx_vl>p).astype(np.double)*0.7
-                    img_input_val = torch.clone(img_input)*torch.tensor(mask_val).to(self.device)
-                    img_input_tensor_val = image_loader(img_input_val, self.device,0.0,0.0)
-                    y_val = image_loader(torch.clone(img_input_val), self.device ,0.0,0.0)
-
-                    mask_val = torch.tensor(mask_val).to(self.device, dtype=torch.float32).unsqueeze(0)
-                    with torch.no_grad():
-                        output_test = self.DenoisNet_r1(img_input_tensor_val,mask_val)
-                        sum_preds[:,:,:] += output_test.detach().cpu().numpy()[0]
-
-                avg_preds = np.squeeze(sum_preds)
-                output = (torch.tensor(avg_preds))/self.Npred
-        print(output.shape)
-        self.f1=torch.clone(output.unsqueeze(0)).detach().to(self.device)
-        print(self.f1.shape)
-        self.denois_its = 20000
-
 
 
     def denoising_step_r2(self):
         f = torch.clone(self.f_std[:,:,:,0])
-        loss_mask = torch.clone(self.x<0.5).detach()
+     #   loss_mask = torch.clone(self.x<0.5).detach()
         #loss_mask = 1-self.x
-        self.mu_r2 = torch.mean(f[loss_mask])
-
+        #self.mu_r2 = torch.mean(f[loss_mask])
+        self.mu_r2 = torch.sum((f*(1-self.x))/torch.sum(1-self.x))
         
-    def combine_denoisings(self):
-        #self.f[self.x>=0.5]=self.f1[self.x>=0.5].float()
-        #self.f[self.x<0.5]=self.f2[self.x<0.5].float()
-        self.f = self.x*self.f1+self.f2 * (1-self.x)
+
     
     def reinitialize_network(self):
         self.net = Net()
@@ -740,6 +676,7 @@ class Denseg_S2S:
         self.optimizer = optim.Adam(self.net.parameters(), lr=self.learning_rate)
 
     def N2Fstep(self):
+
         print("learning_rate"+str(self.learning_rate))
         f = torch.clone(self.f_std[:,:,:,0])
         loss_mask = torch.clone(self.x).detach()        
@@ -933,8 +870,9 @@ class Denseg_S2S:
                 last10.pop(0)
                 last10.append(cleaned*maxer+minner)
                 outputstest = self.net(img_test)
-                self.energy_denoising.append((torch.sum((outputstest-img_test)**2*self.x)/torch.sum(self.x) + torch.sum((img_test - torch.mean(img_test*self.x))**2*(1-self.x))/torch.sum(1-self.x) + self.lam*norm1(gradient(self.x))).cpu())
-
+                self.energy_denoising.append((torch.sum((outputstest-img_test)**2*self.x) + torch.sum((img_test - torch.sum(img_test*(1-self.x))/torch.sum(1-self.x))**2*(1-self.x)) + self.lam*norm1(gradient(self.x))).cpu())
+                self.val_loss_list_N2F.append((torch.sum((outputstest-img_test)**2*self.x)/torch.sum(self.x)).cpu())
+                self.bg_loss_list.append((torch.sum((img_test - torch.sum(img_test*(1-self.x))/torch.sum(1-self.x))**2*(1-self.x))/torch.sum(1-self.x)).cpu())
                 cleaned = outputstest[0,0,:,:].cpu().detach().numpy()
                 noisy = img_test.cpu().detach().numpy()
 
@@ -949,11 +887,21 @@ class Denseg_S2S:
                 else:
                     timesince+=1.0
         H = np.mean(last10, axis=0)
-        if np.sum(np.round(H[1:-1,1:-1]-np.mean(H[1:-1,1:-1]))>0) <= 25 and self.learning_rate != 0.000005:
-            self.learning_rate = 0.000005
-            print("Reducing learning rate")
-        else:
-            notdone = False
+        try: 
+            running_loss = torch.mean(torch.stack(self.val_loss_list_N2F[-101:-1]))
+        except:
+            running_loss = 1e10
+        if self.val_loss_list_N2F[-1] > running_loss:
+            for g in self.optimizer.param_groups:
+                g['lr'] /= 3
+            print('new learning rate is ', g['lr'])
+
+
+        # if np.sum(np.round(H[1:-1,1:-1]-np.mean(H[1:-1,1:-1]))>0) <= 25 and self.learning_rate != 0.000005:
+        #     self.learning_rate = 0.000005
+        #     print("Reducing learning rate")
+        # else:
+        #     notdone = False
 
         #print(H.shape)
         self.f1 = torch.from_numpy(H).to(self.device)
@@ -962,6 +910,5 @@ class Denseg_S2S:
         plt.legend()
         plt.show()
         self.f1 = self.f1.unsqueeze(0)
-        self.learning_rate = self.learning_rate*0.5
 
              
